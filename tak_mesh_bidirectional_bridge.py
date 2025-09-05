@@ -24,8 +24,18 @@ import takproto
 EUD_MULTICAST_GROUP = os.getenv("EUD_MULTICAST_GROUP", "239.2.3.1")
 EUD_LISTEN_PORT = int(os.getenv("EUD_LISTEN_PORT", "6969"))
 
-# Primary TAK forward (TCP to server)
-is_local = os.path.isdir('ots')
+home_base = '/home'
+is_local = False
+if os.path.exists(home_base):
+    for user_dir in os.listdir(home_base):
+        user_home = os.path.join(home_base, user_dir)
+        if os.path.isdir(user_home):
+            ots_path = os.path.join(user_home, 'ots')
+            if os.path.isdir(ots_path):
+                is_local = True
+                break
+
+# Primary TAK forward (TCP to server)            
 TAK_FWD_HOST = os.getenv("TAK_FWD_HOST", "127.0.0.1" if is_local else "")
 TAK_FWD_PORT = int(os.getenv("TAK_FWD_PORT", "8089"))  # Updated to TCP default
 
@@ -688,6 +698,8 @@ def cot_ingress_loop(mesh: Mesh):
 
 # ======================= Main ================================
 def main():
+    log(f"[info] OTS server detected locally: {is_local}")
+    
     if not is_local:
         # health thread
         threading.Thread(target=tcp_probe, daemon=True).start()
