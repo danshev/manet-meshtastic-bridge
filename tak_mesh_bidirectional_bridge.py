@@ -4,8 +4,6 @@
 # - Health probe; on degradation also send compact JSON + Position over Meshtastic
 # - Meshtastic RX via pubsub -> rebuild CoT <event> and send to TAK server (TCP)
 
-# Save in /opt/tak_mesh_bidirectional_bridge.py
-
 import glob
 import hashlib
 import json
@@ -27,7 +25,8 @@ EUD_MULTICAST_GROUP = os.getenv("EUD_MULTICAST_GROUP", "239.2.3.1")
 EUD_LISTEN_PORT = int(os.getenv("EUD_LISTEN_PORT", "6969"))
 
 # Primary TAK forward (TCP to server)
-TAK_FWD_HOST = os.getenv("TAK_FWD_HOST", "127.0.0.1" if os.getenv("TAK_SERVER_LOCAL", "0") == "1" else "")
+is_local = os.path.isdir('ots')
+TAK_FWD_HOST = os.getenv("TAK_FWD_HOST", "127.0.0.1" if is_local else "")
 TAK_FWD_PORT = int(os.getenv("TAK_FWD_PORT", "8089"))  # Updated to TCP default
 
 # Health probe of TAK server (TCP)
@@ -52,9 +51,6 @@ DEFAULT_UID = os.getenv("DEFAULT_UID", "MESH-{from}")
 DEFAULT_TYPE = os.getenv("DEFAULT_TYPE", "a-f-G-U-C")
 DEFAULT_CHAT_TYPE = os.getenv("DEFAULT_CHAT_TYPE", "b-t-f")  # Added for chat
 STALE_SECS = int(os.getenv("STALE_SECS", "60"))
-
-# New: Local TAK server mode
-TAK_SERVER_LOCAL = os.getenv("TAK_SERVER_LOCAL", "0") == "1"
 
 # ======================= Utilities ===========================
 def log(msg: str):
@@ -231,7 +227,7 @@ class TAKServer:
             sock.connect((self.host, self.port))
             with self.lock:
                 self.sock = sock
-                if not TAK_SERVER_LOCAL:  # Only start read_loop if not local, as local might not need bidirectional from server
+                if not is_local:  # Only start read_loop if not local, as local might not need bidirectional from server
                     self.read_thread = threading.Thread(target=self.read_loop, daemon=True)
                     self.read_thread.start()
             return True
@@ -458,7 +454,7 @@ class CotOut:
 
     def send(self, b: bytes):
         log("[cot] Preparing to send CoT to TAK server")
-        if not TAK_SERVER_LOCAL:
+        if not is_local:
             with ip_lock:
                 if ip_unhealthy:
                     log("[cot] Skipped send to server; IP unhealthy")
@@ -687,7 +683,7 @@ def cot_ingress_loop(mesh: Mesh):
 
 # ======================= Main ================================
 def main():
-    if not TAK_SERVER_LOCAL:
+    if not is_local:
         # health thread
         threading.Thread(target=tcp_probe, daemon=True).start()
 
@@ -717,7 +713,7 @@ def main():
     udp_send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     udp_send_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, b'\x02')
 
-    if not TAK_SERVER_LOCAL:
+    if not is_local:
         # TAK ingress in background
         threading.Thread(target=cot_ingress_loop, args=(mesh,), daemon=True).start()
 
