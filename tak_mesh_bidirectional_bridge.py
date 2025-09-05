@@ -569,16 +569,6 @@ def decode_json_text(pkt):
 def on_mesh_receive(packet, interface):
     log("[rx] Received Meshtastic packet via pubsub")
     try:
-        pos = decode_position(packet)
-        if pos:
-            log("[rx] Decoded as native position")
-            uid = pkt_sender_uid(packet)
-            typ = DEFAULT_TYPE
-            cot_xml = make_cot(uid, typ, pos["lat"], pos["lon"], pos["alt"], pos["ts"])
-            cot_out.send(cot_xml)
-            log(f"[cot] sent from POSITION_APP uid={uid} lat={pos['lat']:.6f} lon={pos['lon']:.6f}")
-            return
-
         dat = decode_json_text(packet)
         if dat:
             log(f"[rx] Processing decoded JSON of type {dat['type']}")
