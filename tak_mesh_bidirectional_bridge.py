@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # TAK <-> Meshtastic bidirectional bridge using pubsub for RX events.
-# - TAK ingress (UDP multicast) -> forward to TAK server (TCP) as primary
+# - TAK ingress (UDP multicast) -> forward to OpenTAK Server (TCP) as primary
 # - Health probe; on degradation also send compact JSON + Position over Meshtastic
-# - Meshtastic RX via pubsub -> rebuild CoT <event> and send to TAK server (TCP)
+# - Meshtastic RX via pubsub -> rebuild CoT <event> and send to OpenTAK Server (TCP)
 
 import glob
 import hashlib
@@ -35,11 +35,11 @@ if os.path.exists(home_base):
                 is_local = True
                 break
 
-# Primary TAK forward (TCP to server)            
+# Primary TAK forward (TCP to OpenTAK Server)            
 TAK_FWD_HOST = os.getenv("TAK_FWD_HOST", "127.0.0.1" if is_local else "")
 TAK_FWD_PORT = int(os.getenv("TAK_FWD_PORT", "8089"))  # Updated to TCP default
 
-# Health probe of TAK server (TCP)
+# Health probe of OpenTAK Server (TCP)
 HEALTH_HOST = os.getenv("HEALTH_HOST", TAK_FWD_HOST)
 HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8089"))
 HEALTH_INTERVAL = float(os.getenv("HEALTH_INTERVAL", "3.0"))
@@ -218,7 +218,7 @@ def tcp_probe():
                     log("[health] IP degraded; enabling Meshtastic fallback.")
         time.sleep(HEALTH_INTERVAL)
 
-# ======================= TAK Server Connection ===============
+# ======================= OpenTAK Server Connection ===============
 class TAKServer:
     def __init__(self, host, port):
         self.host = host
@@ -246,11 +246,11 @@ class TAKServer:
 
     def send(self, payload: bytes):
         if not self.connect():
-            log("[server] Failed to connect to TAK server")
+            log("[server] Failed to connect to OpenTAK Server")
             return False
         try:
             self.sock.sendall(payload)
-            log("[server] Successfully sent payload to TAK server")
+            log("[server] Successfully sent payload to OpenTAK Server")
             return True
         except:
             log("[server] Failed to send payload, disconnecting")
@@ -457,7 +457,7 @@ class Mesh:
                 log(f"[mesh] text send error: {e}")
                 return False
 
-# TAK out (reverse to server)
+# CoT output [to OpenTAK Server]
 class CotOut:
     def __init__(self, tak_server):
         self.tak_server = tak_server
@@ -480,7 +480,7 @@ class CotOut:
             log("[cot] Sent raw XML via new socket")
             sock.close()
         except Exception as e:
-            log(f"[cot] error sending to server: {e}")
+            log(f"[cot] error sending to OpenTAK Server: {e}")
 
 def pkt_sender_uid(pkt):
     frm = pkt.get("from") or pkt.get("fromId") or pkt.get("fromIdShort")
@@ -673,7 +673,7 @@ def cot_ingress_loop(mesh: Mesh):
 
 # ======================= Main ================================
 def main():
-    log(f"[info] OTS server detected locally: {is_local}")
+    log(f"[info] OpenTAK Server detected locally: {is_local}")
     
     if not is_local:
         # health thread
@@ -692,7 +692,7 @@ def main():
     pub.subscribe(on_mesh_receive, "meshtastic.receive")
     log("[mesh] subscribed to pubsub topic 'meshtastic.receive'")
 
-    # TAK server
+    # OpenTAK Server
     global tak_server
     tak_server = TAKServer(TAK_FWD_HOST, TAK_FWD_PORT)
 
