@@ -457,7 +457,12 @@ class CotOut:
         if not is_local:
             with ip_lock:
                 if ip_unhealthy:
-                    log("[cot] Skipped send to server; IP unhealthy")
+                    log("[cot] IP unhealthy; broadcasting to local multicast instead")
+                    try:
+                        udp_send_sock.sendto(b, (EUD_MULTICAST_GROUP, EUD_LISTEN_PORT))
+                        log("[cot] Sent raw XML to local multicast")
+                    except Exception as e:
+                        log(f"[cot] Error sending to local multicast: {e}")
                     return
         try:
             # NEW: Use a new socket per send to simulate separate EUD connections (OTS assumes 1 conn = 1 UID)
