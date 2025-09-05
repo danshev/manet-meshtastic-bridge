@@ -11,6 +11,9 @@ Environment=TAK_FWD_HOST=tak.casco-tech.com
 Environment=TAK_FWD_PORT=8089
 Environment=HEALTH_HOST=tak.casco-tech.com
 Environment=HEALTH_PORT=8089
+Environment=HEALTH_INTERVAL=3.0
+Environment=HEALTH_FAILS_TRIGGER=3
+Environment=HEALTH_RECOVER_COUNT=3
 Environment=EUD_MULTICAST_GROUP=239.2.3.1
 Environment=EUD_LISTEN_PORT=6969
 Environment=MESH_MIN_INTERVAL=5.0
@@ -20,8 +23,8 @@ Environment=SEND_POSITION=1
 Environment=DEFAULT_TYPE=a-f-G-U-C
 Environment=DEFAULT_CHAT_TYPE=b-t-f
 Environment=STALE_SECS=60
-Environment=HOW=m-g
-Environment=DEBUG=1
+Environment=TCP_PROBE_TIMEOUT=1.0
+Environment=DEFAULT_UID=MESH-{from}
 ExecStart=/opt/takmesh-venv/bin/python /opt/tak_mesh_bidirectional_bridge.py
 Restart=on-failure
 RestartSec=3
