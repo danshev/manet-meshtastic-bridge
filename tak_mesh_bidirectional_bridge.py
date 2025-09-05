@@ -463,17 +463,14 @@ class CotOut:
         self.tak_server = tak_server
 
     def send(self, b: bytes):
-        log("[cot] Preparing to send CoT to TAK server")
         if not is_local:
-            with ip_lock:
-                if ip_unhealthy:
-                    log("[cot] IP unhealthy; broadcasting to local multicast instead")
-                    try:
-                        udp_send_sock.sendto(b, (EUD_MULTICAST_GROUP, EUD_LISTEN_PORT))
-                        log("[cot] Sent raw XML to local multicast")
-                    except Exception as e:
-                        log(f"[cot] Error sending to local multicast: {e}")
-                    return
+            log("[cot] Broadcasting (local multicast)")
+            try:
+                udp_send_sock.sendto(b, (EUD_MULTICAST_GROUP, EUD_LISTEN_PORT))
+                log("[cot] Broadcast raw XML to local multicast")
+            except Exception as e:
+                log(f"[cot] error during local multicast: {e}")
+
         try:
             # NEW: Use a new socket per send to simulate separate EUD connections (OTS assumes 1 conn = 1 UID)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -483,23 +480,11 @@ class CotOut:
             log("[cot] Sent raw XML via new socket")
             sock.close()
         except Exception as e:
-            log(f"[cot] Error sending to server: {e}")
+            log(f"[cot] error sending to server: {e}")
 
 def pkt_sender_uid(pkt):
     frm = pkt.get("from") or pkt.get("fromId") or pkt.get("fromIdShort")
     return (DEFAULT_UID.replace("{from}", str(frm))) if frm else "MESH-UNKNOWN"
-
-def decode_position(pkt):
-    d = pkt.get("decoded") or {}
-    p = d.get("position") or {}
-    try:
-        lat = float(p.get("latitude"))
-        lon = float(p.get("longitude"))
-    except (TypeError, ValueError):
-        return None
-    alt = float(p.get("altitude", 0))
-    ts = int(p.get("time", time.time()))
-    return {"lat": lat, "lon": lon, "alt": alt, "ts": ts}
 
 def decode_json_text(pkt):
     log("[rx] Attempting to decode JSON from Meshtastic text")
