@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # TAK <-> Meshtastic bidirectional bridge using pubsub for RX events.
-# - TAK ingress (TCP) -> forward to TAK server (TCP) as primary
+# - TAK ingress (UDP multicast) -> forward to TAK server (TCP) as primary
 # - Health probe; on degradation also send compact JSON + Position over Meshtastic
 # - Meshtastic RX via pubsub -> rebuild CoT <event> and send to TAK server (TCP)
 
@@ -22,9 +22,9 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 import takproto
 
 # ======================= Config via env =======================
-# TAK ingress (TCP from EUDs)
-EUD_LISTEN_HOST = os.getenv("EUD_LISTEN_HOST", "0.0.0.0")
-EUD_LISTEN_PORT = int(os.getenv("EUD_LISTEN_PORT", "8089"))
+# TAK ingress (UDP multicast from EUDs)
+EUD_MULTICAST_GROUP = os.getenv("EUD_MULTICAST_GROUP", "239.2.3.1")
+EUD_LISTEN_PORT = int(os.getenv("EUD_LISTEN_PORT", "6969"))
 
 # Primary TAK forward (TCP to server)
 TAK_FWD_HOST = os.getenv("TAK_FWD_HOST", "127.0.0.1" if os.getenv("TAK_SERVER_LOCAL", "0") == "1" else "")
@@ -218,20 +218,8 @@ class TAKServer:
         self.host = host
         self.port = port
         self.sock = None
-        self.clients = []
         self.lock = threading.Lock()
         self.read_thread = None
-
-    def add_client(self, conn):
-        with self.lock:
-            self.clients.append(conn)
-
-    def remove_client(self, conn):
-        with self.lock:
-            try:
-                self.clients.remove(conn)
-            except:
-                pass
 
     def connect(self):
         with self.lock:
@@ -271,11 +259,6 @@ class TAKServer:
                 except:
                     pass
                 self.sock = None
-            for client in self.clients[:]:
-                try:
-                    client.close()
-                except:
-                    pass
 
     def read_loop(self):
         buf = b''
@@ -302,13 +285,11 @@ class TAKServer:
                     if varint_pos + length > len(buf):
                         break
                     msg_buf = buf[0:varint_pos + length]
+                    payload = buf[varint_pos:varint_pos + length]
                     buf = buf[varint_pos + length:]
-                    with self.lock:
-                        for c in self.clients[:]:
-                            try:
-                                c.sendall(msg_buf)
-                            except:
-                                self.remove_client(c)
+                    # Forward to UDP multicast (convert to Mesh format)
+                    mesh_header = b'\xbf\x01\xbf' + payload
+                    udp_send_sock.sendto(mesh_header, (EUD_MULTICAST_GROUP, EUD_LISTEN_PORT))
             except Exception as e:
                 log(f"[server] read error: {e}")
                 break
@@ -623,96 +604,86 @@ def on_mesh_receive(packet, interface):
         log(f"[rx] Ignored packet due to processing error: {e}")
 
 
-# ======================= TAK Ingress (TCP) ===================
+# ======================= TAK Ingress (UDP multicast) ===================
 def cot_ingress_loop(mesh: Mesh):
-    def handle_client(conn, addr):
-        log(f"[bridge] connected from {addr}")
-        tak_server.add_client(conn)
-        buf = b''
-        while True:
-            try:
-                data = conn.recv(65535)
-                if not data:
-                    break
-                buf += data
-                while len(buf) > 0:
-                    if buf[0] != 0xbf:
-                        buf = buf[1:]
-                        continue
-                    varint_pos = 1
-                    length = 0
-                    shift = 0
-                    while varint_pos < len(buf):
-                        byte = buf[varint_pos]
-                        length |= (byte & 0x7f) << shift
-                        shift += 7
-                        varint_pos += 1
-                        if not (byte & 0x80):
-                            break
-                    if varint_pos + length > len(buf):
-                        break
-                    msg_buf = buf[0:varint_pos + length]
-                    payload = buf[varint_pos:varint_pos + length]
-                    buf = buf[varint_pos + length:]
-                    with ip_lock:
-                        fb = ip_unhealthy
-                    if not fb:
-                        tak_server.send(msg_buf)
-                    else:
-                        try:
-                            tak_msg = takproto.parse_proto(payload)
-                            xml = takproto.proto2xml(tak_msg)
-                            parsed = parse_cot(xml)
-                            if parsed:
-                                h = hashlib.sha256(json.dumps(parsed).encode()).hexdigest()
-                                if not dedup_ok(h): continue
-                                if not rate_ok(parsed["uid"]): continue
-                                j = {
-                                    "u": parsed["uid"],
-                                    "ct": parsed["type"],  # CoT type
-                                    "lat": round(parsed["lat"], 6),
-                                    "lon": round(parsed["lon"], 6),
-                                    "a": int(parsed["alt"]),
-                                    "t": parsed["ts"]  # Timestamp
-                                }
-                                if parsed.get("c"):
-                                    j["c"] = parsed["callsign"]
-                                if parsed.get("group"):
-                                    j["g"] = {"n": parsed["group"]["name"], "r": parsed["group"]["role"]}
-                                
-                                if parsed["chat"] is None:
-                                    j["k"] = "p"  # pli
-                                    if SEND_POSITION:
-                                        mesh.send_position(parsed["lat"], parsed["lon"], parsed["alt"], parsed["ts"])
-                                    if SEND_TEXT_TOO:
-                                        mesh.send_text(j)  # auto-JSON + size trim handled inside send_text
-                                else:
-                                    j.update({
-                                        "k": "c",  # chat
-                                        "f": parsed["chat"]["from"],
-                                        "d": parsed["chat"]["to"],
-                                        "m": parsed["chat"]["message"],
-                                    })
-                                    if "chatroom" in parsed["chat"]:  # Add "rc" only if present (saves space for group chats)
-                                        j["rc"] = parsed["chat"]["chatroom"]
-                                    mesh.send_text(j)
-                        except Exception as e:
-                            log(f"[bridge] parse error: {e}")
-            except Exception as e:
-                log(f"[bridge] client error: {e}")
-                break
-        conn.close()
-        tak_server.remove_client(conn)
-        log(f"[bridge] disconnected from {addr}")
-
-    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_sock.bind((EUD_LISTEN_HOST, EUD_LISTEN_PORT))
-    server_sock.listen(5)
-    log(f"[bridge] listening TCP {EUD_LISTEN_HOST}:{EUD_LISTEN_PORT}")
+    import struct
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(('', EUD_LISTEN_PORT))
+    mreq = struct.pack("4sl", socket.inet_aton(EUD_MULTICAST_GROUP), socket.INADDR_ANY)
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    log(f"[bridge] listening UDP multicast {EUD_MULTICAST_GROUP}:{EUD_LISTEN_PORT}")
     while True:
-        conn, addr = server_sock.accept()
-        threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+        data, addr = sock.recvfrom(65535)
+        log(f"[bridge] received from {addr} len={len(data)}")
+        payload = data
+        is_proto = False
+        xml_bytes = None
+        if len(data) > 3 and data[0] == 0xbf and data[2] == 0xbf:
+            version = data[1]
+            payload = data[3:]
+            if version == 1:
+                is_proto = True
+            elif version == 0:
+                is_proto = False
+                xml_bytes = payload
+        else:
+            # Assume raw XML
+            is_proto = False
+            xml_bytes = data
+        with ip_lock:
+            fb = ip_unhealthy
+        if not fb:
+            if is_proto:
+                # Forward as stream proto
+                msg_buf = b'\xbf' + encode_varint(len(payload)) + payload
+                tak_server.send(msg_buf)
+            else:
+                # Forward as raw XML
+                cot_out.send(xml_bytes)
+        else:
+            try:
+                if is_proto:
+                    tak_msg = takproto.parse_proto(payload)
+                    xml = takproto.proto2xml(tak_msg)
+                    parsed = parse_cot(xml.encode('utf-8'))
+                else:
+                    parsed = parse_cot(xml_bytes)
+                if parsed:
+                    h = hashlib.sha256(json.dumps(parsed).encode()).hexdigest()
+                    if not dedup_ok(h): continue
+                    if not rate_ok(parsed["uid"]): continue
+                    j = {
+                        "u": parsed["uid"],
+                        "ct": parsed["type"],  # CoT type
+                        "lat": round(parsed["lat"], 6),
+                        "lon": round(parsed["lon"], 6),
+                        "a": int(parsed["alt"]),
+                        "t": parsed["ts"]  # Timestamp
+                    }
+                    if parsed.get("callsign"):
+                        j["c"] = parsed["callsign"]
+                    if parsed.get("group"):
+                        j["g"] = {"n": parsed["group"]["name"], "r": parsed["group"]["role"]}
+                    
+                    if parsed["chat"] is None:
+                        j["k"] = "p"  # pli
+                        if SEND_POSITION:
+                            mesh.send_position(parsed["lat"], parsed["lon"], parsed["alt"], parsed["ts"])
+                        if SEND_TEXT_TOO:
+                            mesh.send_text(j)  # auto-JSON + size trim handled inside send_text
+                    else:
+                        j.update({
+                            "k": "c",  # chat
+                            "f": parsed["chat"]["from"],
+                            "d": parsed["chat"]["to"],
+                            "m": parsed["chat"]["message"],
+                        })
+                        if "chatroom" in parsed["chat"]:  # Add "rc" only if present (saves space for group chats)
+                            j["rc"] = parsed["chat"]["chatroom"]
+                        mesh.send_text(j)
+            except Exception as e:
+                log(f"[bridge] parse error: {e}")
 
 # ======================= Main ================================
 def main():
@@ -741,6 +712,11 @@ def main():
     global cot_out
     cot_out = CotOut(tak_server)
 
+    # UDP send sock for reverse direction
+    global udp_send_sock
+    udp_send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    udp_send_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, b'\x02')
+
     if not TAK_SERVER_LOCAL:
         # TAK ingress in background
         threading.Thread(target=cot_ingress_loop, args=(mesh,), daemon=True).start()
@@ -755,6 +731,7 @@ def main():
 mesh = Mesh(SERIAL_DEV if os.path.exists(SERIAL_DEV) else (sorted(glob.glob("/dev/ttyACM*")) + [None])[0])
 tak_server = None
 cot_out = None
+udp_send_sock = None
 
 if __name__ == "__main__":
     main()
