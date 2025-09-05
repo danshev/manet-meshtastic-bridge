@@ -1,0 +1,32 @@
+# Put in /etc/systemd/system/tak-mesh-bidirectional.service
+
+[Unit]
+Description=TAK <-> Meshtastic Bidirectional Bridge (single-serial)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=SERIAL_DEV=/dev/meshtastic0
+Environment=TAK_FWD_HOST=tak.casco-tech.com
+Environment=TAK_FWD_PORT=8089
+Environment=HEALTH_HOST=tak.casco-tech.com
+Environment=HEALTH_PORT=8089
+Environment=EUD_MULTICAST_GROUP=239.2.3.1
+Environment=EUD_LISTEN_PORT=6969
+Environment=MESH_MIN_INTERVAL=5.0
+Environment=DEDUP_WINDOW=120.0
+Environment=SEND_TEXT_TOO=1
+Environment=SEND_POSITION=1
+Environment=DEFAULT_TYPE=a-f-G-U-C
+Environment=DEFAULT_CHAT_TYPE=b-t-f
+Environment=STALE_SECS=60
+Environment=HOW=m-g
+Environment=DEBUG=1
+ExecStart=/opt/takmesh-venv/bin/python /opt/tak_mesh_bidirectional_bridge.py
+Restart=on-failure
+RestartSec=3
+User=root
+WorkingDirectory=/opt
+
+[Install]
+WantedBy=multi-user.target
